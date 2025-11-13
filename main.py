@@ -225,7 +225,7 @@ def send_alerts():
         msg += f"   {bet['raison']}\n\n"
     
     try:
-        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg)
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg)
         print(f"✅ {len(top_bets)} paris envoyés")
     except Exception as e:
         print(f"❌ Erreur Telegram: {e}")
@@ -234,7 +234,7 @@ schedule.every(6).hours.do(send_alerts)  # Toutes les 6h
 
 if __name__ == "__main__":
     try:
-        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Agent Paris Intelligence activé !")
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Agent Paris Intelligence activé !")
         send_alerts()  # Analyse immédiate au démarrage
     except Exception as e:
         print(f"Erreur démarrage: {e}")
