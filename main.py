@@ -4,6 +4,9 @@ import pandas as pd
 import time
 import schedule
 from datetime import datetime, timedelta
+
+from dotenv import load_dotenv
+load_dotenv()  # Charge les variables depuis .env
 from telegram import Bot
 
 # Variables d'environnement
