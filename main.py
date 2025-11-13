@@ -7,8 +7,7 @@ from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 load_dotenv()  # Charge les variables depuis .env
-from telegram import Bot
-
+import telebot
 # Variables d'environnement
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -30,12 +29,11 @@ VICTORIES_MIN = 3  # Minimum de victoires sur 5 derniers matchs
 if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID or not API_KEY:
     raise ValueError("Variables d'environnement manquantes")
 
-bot = Bot(token=TELEGRAM_TOKEN)
+bot = telebot.TeleBot(token=TELEGRAM_TOKEN)
 
 def get_team_stats(team_id, league_id):
     """Récupère les stats d'une équipe"""
-    url = "https://v3.football.api-sports.io/teams/statistics"
-    params = {"team": team_id, "league": league_id, "season": 2024}
+
     headers = {"x-apisports-key": API_KEY}
     
     try:
