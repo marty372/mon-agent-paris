@@ -228,7 +228,7 @@ def send_alerts():
     except Exception as e:
         print(f"❌ Erreur Telegram: {e}")
 
-schedule.every(6).hours.do(send_alerts)  # Toutes les 6h
+schedule.every(2).hours.do(send_alerts)  # Toutes les  2h
 
 if __name__ == "__main__":
     try:
