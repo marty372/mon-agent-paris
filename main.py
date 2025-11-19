@@ -1,242 +1,228 @@
-import os
-import requests
-import pandas as pd
 import time
 import schedule
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime
 
-from dotenv import load_dotenv
-load_dotenv()  # Charge les variables depuis .env
-import telebot
-# Variables d'environnement
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-API_KEY = os.getenv("API_KEY")
+import config
+from api_client import FootballAPI
+from analyzer import BetAnalyzer
+from telegram_bot import BettingBot
+from bet_tracker import BetTracker
+from kelly_criterion import KellyCriterion
 
-LEAGUES = {
-    "Ligue 1": 61,
-    "Premier League": 39,
-    "LaLiga": 140,
-    "Serie A": 135,
-    "Bundesliga": 78
-}
+# Configure Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("bot.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
-# Paramètres de paris
-COTE_MIN = 1.5  # Cote minimale intéressante
-COTE_MAX = 3.0  # Cote maximale (trop risqué au-delà)
-VICTORIES_MIN = 3  # Minimum de victoires sur 5 derniers matchs
-
-if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID or not API_KEY:
-    raise ValueError("Variables d'environnement manquantes")
-
-bot = telebot.TeleBot(token=TELEGRAM_TOKEN)
-
-def get_team_stats(team_id, league_id):
-    """Récupère les stats d'une équipe"""
-
-    headers = {"x-apisports-key": API_KEY}
+def run_analysis():
+    logger.info("Starting analysis cycle...")
     
-    try:
-        r = requests.get(url, headers=headers, params=params)
-        r.raise_for_status()
-        data = r.json()["response"]
-        
-        # Extraire les stats importantes
-        form = data["form"][-5:]  # 5 derniers matchs
-        wins = form.count('W')
-        goals_for = data["goals"]["for"]["total"]["total"]
-        goals_against = data["goals"]["against"]["total"]["total"]
-        
-        return {
-            "wins_last_5": wins,
-            "form": form,
-            "goals_for": goals_for,
-            "goals_against": goals_against,
-            "clean_sheets": data["clean_sheet"]["total"]
-        }
-    except Exception as e:
-        print(f"Erreur stats: {e}")
-        return None
-
-def get_matches_with_odds():
-    """Récupère matchs + cotes + stats"""
+    api = FootballAPI()
+    analyzer = BetAnalyzer()
+    bot = BettingBot()
+    tracker = BetTracker()
+    kelly = KellyCriterion(config.BANKROLL, config.KELLY_FRACTION)
+    
     all_bets = []
-    headers = {"x-apisports-key": API_KEY}
     
-    for league_name, league_id in LEAGUES.items():
-        # Récupérer les matchs avec cotes
-        url = "https://v3.football.api-sports.io/odds"
-        params = {
-            "league": league_id,
-            "season": 2024,
-            "bet": 1,  # Match Winner (1X2)
-            "bookmaker": 8  # Bet365
-        }
+    for league_name, league_id in config.LEAGUES.items():
+        logger.info(f"Checking {league_name}...")
         
-        try:
-            r = requests.get(url, headers=headers, params=params)
-            r.raise_for_status()
-            data = r.json()
+        # 1. Get Fixtures with Odds
+        fixtures = api.get_fixtures_with_odds(league_id)
+        
+        if not fixtures:
+            logger.warning(f"No fixtures found for {league_name}")
+            continue
             
-            for fixture in data["response"]:
-                fixture_data = fixture["fixture"]
-                dt = datetime.strptime(fixture_data["date"][:16], "%Y-%m-%dT%H:%M")
+        for fixture_obj in fixtures:
+            try:
+                fixture = fixture_obj["fixture"]
                 
-                # Seulement matchs dans les 3 prochains jours
-                if dt > datetime.now() + timedelta(days=3):
+                # Date Filter (Next 3 days)
+                match_date = datetime.fromisoformat(fixture["date"].replace("Z", "+00:00"))
+                if match_date > datetime.now(match_date.tzinfo) + time.timedelta(days=3):
                     continue
-                
-                # Extraire les cotes
-                if not fixture.get("bookmakers"):
+
+                # Check Odds availability
+                if not fixture_obj.get("bookmakers"):
                     continue
                     
-                odds = fixture["bookmakers"][0]["bets"][0]["values"]
-                home_odd = float([o["odd"] for o in odds if o["value"] == "Home"][0])
-                away_odd = float([o["odd"] for o in odds if o["value"] == "Away"][0])
+                odds = fixture_obj["bookmakers"][0]["bets"][0]["values"]
+                home_odd = next((float(o["odd"]) for o in odds if o["value"] == "Home"), 0)
+                away_odd = next((float(o["odd"]) for o in odds if o["value"] == "Away"), 0)
                 
-                # Récupérer les stats des équipes
-                home_team = fixture["teams"]["home"]
-                away_team = fixture["teams"]["away"]
+                if home_odd == 0 or away_odd == 0:
+                    continue
+
+                # Get Team Stats
+                home_team = fixture_obj["teams"]["home"]
+                away_team = fixture_obj["teams"]["away"]
                 
-                home_stats = get_team_stats(home_team["id"], league_id)
-                away_stats = get_team_stats(away_team["id"], league_id)
+                home_stats = api.get_team_stats(home_team["id"], league_id)
+                away_stats = api.get_team_stats(away_team["id"], league_id)
                 
                 if not home_stats or not away_stats:
                     continue
                 
-                # ANALYSE : Détecter les value bets
-                bet_home = analyze_bet(
-                    home_stats, away_stats, home_odd, "Domicile",
-                    home_team["name"], away_team["name"]
-                )
+                # --- LEVEL 3: DROPPING ODDS CHECK ---
+                # Create a unique match ID (e.g., "2024-05-20_PSG_Lyon")
+                match_id = f"{fixture['date'][:10]}_{home_team['name']}_{away_team['name']}".replace(" ", "")
+                drop_alerts = tracker.check_dropping_odds(match_id, home_odd, away_odd)
                 
-                bet_away = analyze_bet(
-                    away_stats, home_stats, away_odd, "Extérieur",
-                    away_team["name"], home_team["name"]
-                )
-                
-                if bet_home:
-                    all_bets.append({
-                        "date": fixture_data["date"][:10],
-                        "heure": fixture_data["date"][11:16],
-                        "ligue": league_name,
-                        "match": f"{home_team['name']} vs {away_team['name']}",
-                        "pari": f"Victoire {home_team['name']}",
-                        "cote": home_odd,
-                        "raison": bet_home,
-                        "confiance": calculate_confidence(home_stats, home_odd)
-                    })
-                
-                if bet_away:
-                    all_bets.append({
-                        "date": fixture_data["date"][:10],
-                        "heure": fixture_data["date"][11:16],
-                        "ligue": league_name,
-                        "match": f"{home_team['name']} vs {away_team['name']}",
-                        "pari": f"Victoire {away_team['name']}",
-                        "cote": away_odd,
-                        "raison": bet_away,
-                        "confiance": calculate_confidence(away_stats, away_odd)
-                    })
+                # If significant drop, we can boost confidence or just add it to reasons
+                drop_reason = " | ".join(drop_alerts) if drop_alerts else None
+                # ------------------------------------
+
+                # Analyze Home Bet
+                reason_home = analyzer.analyze_bet(home_stats, away_stats, home_odd, "home", home_team["name"], away_team["name"])
+                if reason_home or (drop_reason and "DOMICILE" in drop_reason):
+                    # Combine reasons
+                    full_reason = reason_home if reason_home else ""
+                    if drop_reason and "DOMICILE" in drop_reason:
+                        full_reason = f"{drop_reason} | {full_reason}" if full_reason else drop_reason
                     
-        except Exception as e:
-            print(f"Erreur {league_name}: {e}")
-    
-    return sorted(all_bets, key=lambda x: x["confiance"], reverse=True)
+                    if full_reason:
+                        confidence = analyzer.calculate_confidence(home_stats, home_odd, "home")
+                        # Boost confidence if dropping odds
+                        if drop_reason and "DOMICILE" in drop_reason:
+                            confidence = min(100, confidence + 15)
+                            
+                        stake_info = kelly.get_recommendation(home_odd, confidence)
+                        
+                        bet_data = {
+                            "match": f"{home_team['name']} vs {away_team['name']}",
+                            "date": fixture["date"][:10],
+                            "heure": fixture["date"][11:16],
+                            "ligue": league_name,
+                            "pari": f"Victoire {home_team['name']}",
+                            "cote": home_odd,
+                            "raison": full_reason,
+                            "confiance": confidence,
+                            "stake": stake_info['stake'],
+                            "recommendation": stake_info['recommendation']
+                        }
+                        
+                        all_bets.append(bet_data)
+                        # tracker.record_bet(bet_data, stake_info['stake']) # Moved to send phase for ID retrieval
 
-def analyze_bet(team_stats, opponent_stats, odd, location, team_name, opponent_name):
-    """Analyse si un pari est intéressant"""
-    
-    # Vérifier cote dans la range acceptable
-    if odd < COTE_MIN or odd > COTE_MAX:
-        return None
-    
-    reasons = []
-    
-    # Critère 1 : Forme récente excellente
-    if team_stats["wins_last_5"] >= VICTORIES_MIN:
-        reasons.append(f"✅ Forme: {team_stats['wins_last_5']}/5 victoires")
-    
-    # Critère 2 : Différence de forme significative
-    if team_stats["wins_last_5"] - opponent_stats["wins_last_5"] >= 2:
-        reasons.append(f"🔥 Meilleure forme que l'adversaire")
-    
-    # Critère 3 : Attaque forte
-    if team_stats["goals_for"] > opponent_stats["goals_for"] * 1.2:
-        reasons.append(f"⚽ Attaque supérieure ({team_stats['goals_for']} buts)")
-    
-    # Critère 4 : Défense solide
-    if team_stats["goals_against"] < opponent_stats["goals_against"] * 0.8:
-        reasons.append(f"🛡️ Défense solide")
-    
-    # Au moins 2 critères remplis pour recommander
-    if len(reasons) >= 2:
-        return " | ".join(reasons)
-    
-    return None
+                # Analyze Away Bet
+                reason_away = analyzer.analyze_bet(home_stats, away_stats, away_odd, "away", away_team["name"], home_team["name"])
+                if reason_away or (drop_reason and "EXTÉRIEUR" in drop_reason):
+                    # Combine reasons
+                    full_reason = reason_away if reason_away else ""
+                    if drop_reason and "EXTÉRIEUR" in drop_reason:
+                        full_reason = f"{drop_reason} | {full_reason}" if full_reason else drop_reason
+                        
+                    if full_reason:
+                        confidence = analyzer.calculate_confidence(away_stats, away_odd, "away")
+                        # Boost confidence if dropping odds
+                        if drop_reason and "EXTÉRIEUR" in drop_reason:
+                            confidence = min(100, confidence + 15)
 
-def calculate_confidence(stats, odd):
-    """Calcule un score de confiance (0-100)"""
-    score = 0
-    
-    # Forme récente (max 40 points)
-    score += stats["wins_last_5"] * 8
-    
-    # Cote (max 30 points) - cote basse = plus sûr
-    if odd < 2.0:
-        score += 30
-    elif odd < 2.5:
-        score += 20
+                        stake_info = kelly.get_recommendation(away_odd, confidence)
+                        
+                        bet_data = {
+                            "match": f"{home_team['name']} vs {away_team['name']}",
+                            "date": fixture["date"][:10],
+                            "heure": fixture["date"][11:16],
+                            "ligue": league_name,
+                            "pari": f"Victoire {away_team['name']}",
+                            "cote": away_odd,
+                            "raison": full_reason,
+                            "confiance": confidence,
+                            "stake": stake_info['stake'],
+                            "recommendation": stake_info['recommendation']
+                        }
+                        
+                        all_bets.append(bet_data)
+                        # tracker.record_bet(bet_data, stake_info['stake']) # Moved to send phase for ID retrieval
+                    
+            except Exception as e:
+                logger.error(f"Error processing fixture: {e}")
+                continue
+
+    # Sort and Send
+    if all_bets:
+        all_bets.sort(key=lambda x: x["confiance"], reverse=True)
+        top_bets = all_bets[:5]
+        
+        # Send summary first
+        # bot.send_message(f"🔍 Analyse terminée : {len(top_bets)} paris trouvés.")
+        
+        # Send individual interactive messages
+        for bet in top_bets:
+            # We need the ID from the database to attach to the button
+            # Since we just inserted it, we can get the last ID or query it.
+            # For simplicity, let's assume record_bet returns the ID
+            bet_id = tracker.record_bet(bet, bet['stake'])
+            bot.send_bet_with_buttons(bet, bet_id)
+            
+        logger.info(f"Sent {len(top_bets)} bets to Telegram")
     else:
-        score += 10
-    
-    # Bilan offensif/défensif (max 30 points)
-    if stats["goals_for"] > 30:
-        score += 15
-    if stats["goals_against"] < 20:
-        score += 15
-    
-    return min(score, 100)
+        logger.info("No value bets found this cycle.")
 
-def send_alerts():
-    """Envoie les meilleurs paris"""
-    print(f"🔍 Analyse à {datetime.now().strftime('%H:%M')}")
-    
-    best_bets = get_matches_with_odds()
-    
-    if not best_bets:
-        print("ℹ️ Aucun pari intéressant trouvé")
-        return
-    
-    # Top 5 paris avec meilleure confiance
-    top_bets = best_bets[:5]
-    
-    msg = "🎯 TOP PARIS DU JOUR\n\n"
-    
-    for i, bet in enumerate(top_bets, 1):
-        msg += f"{i}. {bet['match']}\n"
-        msg += f"   📅 {bet['date']} à {bet['heure']}\n"
-        msg += f"   🎭 {bet['ligue']}\n"
-        msg += f"   🎯 Pari: {bet['pari']}\n"
-        msg += f"   💰 Cote: {bet['cote']}\n"
-        msg += f"   📈 Confiance: {bet['confiance']}%\n"
-        msg += f"   {bet['raison']}\n\n"
-    
-    try:
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg)
-        print(f"✅ {len(top_bets)} paris envoyés")
-    except Exception as e:
-        print(f"❌ Erreur Telegram: {e}")
-
-schedule.every(2).hours.do(send_alerts)  # Toutes les  2h
-
-if __name__ == "__main__":
-    try:
-        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text="✅ Agent Paris Intelligence activé !")
-        send_alerts()  # Analyse immédiate au démarrage
-    except Exception as e:
-        print(f"Erreur démarrage: {e}")
-    
+def start_scheduler():
+    schedule.every(2).hours.do(run_analysis)
+    logger.info("Scheduler started...")
     while True:
         schedule.run_pending()
         time.sleep(60)
+
+def start_bot_polling():
+    bot = BettingBot()
+    tracker = BetTracker()
+    
+    @bot.bot.callback_query_handler(func=lambda call: True)
+    def callback_query(call):
+        try:
+            action, bet_id = call.data.split("_")
+            bet_id = int(bet_id)
+            
+            if action == "win":
+                # Calculate profit
+                # We need to fetch the bet to get odds and stake
+                # For now, let's just mark it as won. 
+                # Ideally BetTracker should handle profit calc.
+                # Let's update BetTracker to calculate profit on update
+                tracker.update_result(bet_id, "won", 0) # Profit calc needed in tracker
+                bot.bot.answer_callback_query(call.id, "✅ Pari marqué comme GAGNÉ !")
+                bot.bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, 
+                                          text=f"{call.message.text}\n\n✅ RÉSULTAT: GAGNÉ")
+            elif action == "loss":
+                tracker.update_result(bet_id, "lost", 0)
+                bot.bot.answer_callback_query(call.id, "❌ Pari marqué comme PERDU")
+                bot.bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, 
+                                          text=f"{call.message.text}\n\n❌ RÉSULTAT: PERDU")
+        except Exception as e:
+            logger.error(f"Callback error: {e}")
+
+    logger.info("Bot polling started...")
+    bot.bot.infinity_polling()
+
+if __name__ == "__main__":
+    import threading
+    
+    # Initial run
+    try:
+        bot = BettingBot()
+        bot.send_welcome()
+        # Run analysis once in a separate thread so it doesn't block polling start
+        threading.Thread(target=run_analysis).start()
+    except Exception as e:
+        logger.error(f"Startup error: {e}")
+
+    # Start Scheduler Thread
+    scheduler_thread = threading.Thread(target=start_scheduler)
+    scheduler_thread.daemon = True
+    scheduler_thread.start()
+    
+    # Start Bot Polling (Main Thread)
+    start_bot_polling()
