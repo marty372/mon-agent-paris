@@ -45,6 +45,18 @@ class FootballAPI:
         data = self._get("players/topscorers", params)
         return data[:20] if data else []
 
+    def get_standings(self, league_id, season=2024):
+        """Get league standings."""
+        params = {
+            "league": league_id,
+            "season": season
+        }
+        data = self._get("standings", params)
+        if data and len(data) > 0:
+            # API-Football structure: response[0]['league']['standings'][0] (for first group/table)
+            return data[0]['league']['standings'][0]
+        return []
+
     def get_team_stats(self, team_id, league_id, season=2024):
         """Get team statistics."""
         params = {

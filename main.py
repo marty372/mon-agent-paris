@@ -35,8 +35,16 @@ def run_analysis():
     for league_name, league_id in config.LEAGUES.items():
         logger.info(f"Checking {league_name}...")
         
-        # 0. Get Top Scorers (Cached for this run)
+        # 0. Get Top Scorers & Standings (Cached for this run)
         top_scorers = api.get_top_scorers(league_id)
+        standings = api.get_standings(league_id)
+        
+        # Helper to find rank
+        def get_rank(team_id, standings_list):
+            for row in standings_list:
+                if row['team']['id'] == team_id:
+                    return row['rank']
+            return 10 # Default middle rank if not found
         
         # 1. Get Fixtures with Odds
         fixtures = api.get_fixtures_with_odds(league_id)
@@ -83,6 +91,12 @@ def run_analysis():
                 # If significant drop, we can boost confidence or just add it to reasons
                 drop_reason = " | ".join(drop_alerts) if drop_alerts else None
                 # ------------------------------------
+                
+                # --- NEW: STANDINGS CHECK ---
+                home_rank = get_rank(home_team["id"], standings)
+                away_rank = get_rank(away_team["id"], standings)
+                rank_reason = analyzer.analyze_standings(home_rank, away_rank)
+                # ----------------------------
 
                 # Helper to get odds by ID
                 def get_bet_values(bet_id):
@@ -94,14 +108,17 @@ def run_analysis():
                 # 1. MATCH WINNER (ID 1)
                 # Analyze Home Bet
                 reason_home = analyzer.analyze_bet(home_stats, away_stats, home_odd, "home", home_team["name"], away_team["name"])
-                if reason_home or (drop_reason and "DOMICILE" in drop_reason):
+                if reason_home or (drop_reason and "DOMICILE" in drop_reason) or (rank_reason and "Avantage" in rank_reason and home_rank < away_rank):
                     full_reason = reason_home if reason_home else ""
                     if drop_reason and "DOMICILE" in drop_reason:
                         full_reason = f"{drop_reason} | {full_reason}" if full_reason else drop_reason
+                    if rank_reason and home_rank < away_rank:
+                         full_reason = f"{rank_reason} | {full_reason}" if full_reason else rank_reason
                     
                     if full_reason:
                         confidence = analyzer.calculate_confidence(home_stats, home_odd, "home")
                         if drop_reason and "DOMICILE" in drop_reason: confidence = min(100, confidence + 15)
+                        if rank_reason and home_rank < away_rank: confidence = min(100, confidence + 10) # Boost for rank
                         stake_info = kelly.get_recommendation(home_odd, confidence)
                         
                         all_bets.append({
@@ -119,14 +136,18 @@ def run_analysis():
 
                 # Analyze Away Bet
                 reason_away = analyzer.analyze_bet(home_stats, away_stats, away_odd, "away", away_team["name"], home_team["name"])
-                if reason_away or (drop_reason and "EXTÉRIEUR" in drop_reason):
+                if reason_away or (drop_reason and "EXTÉRIEUR" in drop_reason) or (rank_reason and "Avantage" in rank_reason and away_rank < home_rank):
                     full_reason = reason_away if reason_away else ""
                     if drop_reason and "EXTÉRIEUR" in drop_reason:
                         full_reason = f"{drop_reason} | {full_reason}" if full_reason else drop_reason
+                    if rank_reason and away_rank < home_rank:
+                         full_reason = f"{rank_reason} | {full_reason}" if full_reason else rank_reason
                         
                     if full_reason:
                         confidence = analyzer.calculate_confidence(away_stats, away_odd, "away")
                         if drop_reason and "EXTÉRIEUR" in drop_reason: confidence = min(100, confidence + 15)
+                        if rank_reason and away_rank < home_rank: confidence = min(100, confidence + 10) # Boost for rank
+
                         stake_info = kelly.get_recommendation(away_odd, confidence)
                         
                         all_bets.append({

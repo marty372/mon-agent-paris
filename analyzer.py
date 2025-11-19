@@ -173,6 +173,17 @@ class BetAnalyzer:
             
         return min(score, 100)
 
+    def analyze_standings(self, home_rank, away_rank):
+        """Analyze based on league standings."""
+        diff = away_rank - home_rank # Positive if Home is better (lower rank)
+        
+        if diff >= 10: # Huge gap (e.g. 1st vs 12th)
+            return f"🔝 Écart de niveau ({home_rank}e vs {away_rank}e)"
+        elif diff >= 5:
+            return f"📈 Avantage classement ({home_rank}e vs {away_rank}e)"
+            
+        return None
+
     def analyze_over15(self, home_stats, away_stats, over_odd):
         """Analyze Over 1.5 Goals market."""
         if over_odd < 1.20 or over_odd > 2.00: # Safety range
