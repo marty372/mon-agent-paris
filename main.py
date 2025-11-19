@@ -35,6 +35,9 @@ def run_analysis():
     for league_name, league_id in config.LEAGUES.items():
         logger.info(f"Checking {league_name}...")
         
+        # 0. Get Top Scorers (Cached for this run)
+        top_scorers = api.get_top_scorers(league_id)
+        
         # 1. Get Fixtures with Odds
         fixtures = api.get_fixtures_with_odds(league_id)
         
@@ -81,23 +84,27 @@ def run_analysis():
                 drop_reason = " | ".join(drop_alerts) if drop_alerts else None
                 # ------------------------------------
 
+                # Helper to get odds by ID
+                def get_bet_values(bet_id):
+                    for b in fixture_obj["bookmakers"][0]["bets"]:
+                        if b["id"] == bet_id:
+                            return b["values"]
+                    return []
+
+                # 1. MATCH WINNER (ID 1)
                 # Analyze Home Bet
                 reason_home = analyzer.analyze_bet(home_stats, away_stats, home_odd, "home", home_team["name"], away_team["name"])
                 if reason_home or (drop_reason and "DOMICILE" in drop_reason):
-                    # Combine reasons
                     full_reason = reason_home if reason_home else ""
                     if drop_reason and "DOMICILE" in drop_reason:
                         full_reason = f"{drop_reason} | {full_reason}" if full_reason else drop_reason
                     
                     if full_reason:
                         confidence = analyzer.calculate_confidence(home_stats, home_odd, "home")
-                        # Boost confidence if dropping odds
-                        if drop_reason and "DOMICILE" in drop_reason:
-                            confidence = min(100, confidence + 15)
-                            
+                        if drop_reason and "DOMICILE" in drop_reason: confidence = min(100, confidence + 15)
                         stake_info = kelly.get_recommendation(home_odd, confidence)
                         
-                        bet_data = {
+                        all_bets.append({
                             "match": f"{home_team['name']} vs {away_team['name']}",
                             "date": fixture["date"][:10],
                             "heure": fixture["date"][11:16],
@@ -108,28 +115,21 @@ def run_analysis():
                             "confiance": confidence,
                             "stake": stake_info['stake'],
                             "recommendation": stake_info['recommendation']
-                        }
-                        
-                        all_bets.append(bet_data)
-                        # tracker.record_bet(bet_data, stake_info['stake']) # Moved to send phase for ID retrieval
+                        })
 
                 # Analyze Away Bet
                 reason_away = analyzer.analyze_bet(home_stats, away_stats, away_odd, "away", away_team["name"], home_team["name"])
                 if reason_away or (drop_reason and "EXTÉRIEUR" in drop_reason):
-                    # Combine reasons
                     full_reason = reason_away if reason_away else ""
                     if drop_reason and "EXTÉRIEUR" in drop_reason:
                         full_reason = f"{drop_reason} | {full_reason}" if full_reason else drop_reason
                         
                     if full_reason:
                         confidence = analyzer.calculate_confidence(away_stats, away_odd, "away")
-                        # Boost confidence if dropping odds
-                        if drop_reason and "EXTÉRIEUR" in drop_reason:
-                            confidence = min(100, confidence + 15)
-
+                        if drop_reason and "EXTÉRIEUR" in drop_reason: confidence = min(100, confidence + 15)
                         stake_info = kelly.get_recommendation(away_odd, confidence)
                         
-                        bet_data = {
+                        all_bets.append({
                             "match": f"{home_team['name']} vs {away_team['name']}",
                             "date": fixture["date"][:10],
                             "heure": fixture["date"][11:16],
@@ -140,10 +140,77 @@ def run_analysis():
                             "confiance": confidence,
                             "stake": stake_info['stake'],
                             "recommendation": stake_info['recommendation']
-                        }
-                        
-                        all_bets.append(bet_data)
-                        # tracker.record_bet(bet_data, stake_info['stake']) # Moved to send phase for ID retrieval
+                        })
+
+                # 2. OVER/UNDER 1.5 GOALS (ID 5)
+                ou_values = get_bet_values(5)
+                over_15_odd = next((float(o["odd"]) for o in ou_values if o["value"] == "Over 1.5"), 0)
+                if over_15_odd > 0:
+                    reason_ou = analyzer.analyze_over15(home_stats, away_stats, over_15_odd)
+                    if reason_ou:
+                        confidence = 80 # High base confidence for Over 1.5 strategy
+                        stake_info = kelly.get_recommendation(over_15_odd, confidence)
+                        all_bets.append({
+                            "match": f"{home_team['name']} vs {away_team['name']}",
+                            "date": fixture["date"][:10],
+                            "heure": fixture["date"][11:16],
+                            "ligue": league_name,
+                            "pari": "Plus de 1.5 Buts",
+                            "cote": over_15_odd,
+                            "raison": reason_ou,
+                            "confiance": confidence,
+                            "stake": stake_info['stake'],
+                            "recommendation": stake_info['recommendation']
+                        })
+
+                # 3. BOTH TEAMS TO SCORE (ID 8)
+                btts_values = get_bet_values(8)
+                btts_yes_odd = next((float(o["odd"]) for o in btts_values if o["value"] == "Yes"), 0)
+                if btts_yes_odd > 0:
+                    reason_btts = analyzer.analyze_btts(home_stats, away_stats, btts_yes_odd)
+                    if reason_btts:
+                        confidence = 75
+                        stake_info = kelly.get_recommendation(btts_yes_odd, confidence)
+                        all_bets.append({
+                            "match": f"{home_team['name']} vs {away_team['name']}",
+                            "date": fixture["date"][:10],
+                            "heure": fixture["date"][11:16],
+                            "ligue": league_name,
+                            "pari": "Les 2 équipes marquent",
+                            "cote": btts_yes_odd,
+                            "raison": reason_btts,
+                            "confiance": confidence,
+                            "stake": stake_info['stake'],
+                            "recommendation": stake_info['recommendation']
+                        })
+                
+                # 4. GOALSCORERS (ID 4)
+                if top_scorers:
+                    scorer_values = get_bet_values(4)
+                    if scorer_values:
+                        # Check only players with odds > 2.0 (filtered in analyzer)
+                        # Optimization: Only check players in top_scorers list to avoid looping 100 players
+                        # But odds list has player names.
+                        for odd_obj in scorer_values:
+                            player_name = odd_obj["value"]
+                            player_odd = float(odd_obj["odd"])
+                            
+                            reason_scorer = analyzer.analyze_goalscorer(player_name, player_odd, top_scorers)
+                            if reason_scorer:
+                                confidence = 70 # Base confidence for goalscorers
+                                stake_info = kelly.get_recommendation(player_odd, confidence)
+                                all_bets.append({
+                                    "match": f"{home_team['name']} vs {away_team['name']}",
+                                    "date": fixture["date"][:10],
+                                    "heure": fixture["date"][11:16],
+                                    "ligue": league_name,
+                                    "pari": f"Buteur: {player_name}",
+                                    "cote": player_odd,
+                                    "raison": reason_scorer,
+                                    "confiance": confidence,
+                                    "stake": stake_info['stake'],
+                                    "recommendation": stake_info['recommendation']
+                                })
                     
             except Exception as e:
                 logger.error(f"Error processing fixture: {e}")

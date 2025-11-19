@@ -30,12 +30,20 @@ class FootballAPI:
         params = {
             "league": league_id,
             "season": season,
-            "bet": 1,  # Match Winner
             "bookmaker": 8  # Bet365
         }
         
         # We might need to filter by date manually if the API doesn't support a range in this endpoint
         return self._get("odds", params)
+
+    def get_top_scorers(self, league_id, season=2024):
+        """Get top 20 scorers for a league."""
+        params = {
+            "league": league_id,
+            "season": season
+        }
+        data = self._get("players/topscorers", params)
+        return data[:20] if data else []
 
     def get_team_stats(self, team_id, league_id, season=2024):
         """Get team statistics."""

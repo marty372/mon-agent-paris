@@ -172,3 +172,64 @@ class BetAnalyzer:
             pass
             
         return min(score, 100)
+
+    def analyze_over15(self, home_stats, away_stats, over_odd):
+        """Analyze Over 1.5 Goals market."""
+        if over_odd < 1.20 or over_odd > 2.00: # Safety range
+            return None
+            
+        try:
+            # Get averages
+            h_gf = float(home_stats["goals"]["for"]["average"]["home"])
+            a_gf = float(away_stats["goals"]["for"]["average"]["away"])
+            h_ga = float(home_stats["goals"]["against"]["average"]["home"])
+            a_ga = float(away_stats["goals"]["against"]["average"]["away"])
+            
+            avg_total_goals = (h_gf + a_gf + h_ga + a_ga) / 2
+            
+            reasons = []
+            if avg_total_goals > 2.5: # High scoring potential
+                reasons.append(f"⚽ Match ouvert ({avg_total_goals:.1f} buts/m moy.)")
+                
+            # Check recent form scoring
+            h_form = home_stats.get("form", "")
+            a_form = away_stats.get("form", "")
+            
+            # If both teams scored in recent games (proxy for good attack)
+            if reasons:
+                return " | ".join(reasons)
+                
+        except:
+            pass
+        return None
+
+    def analyze_btts(self, home_stats, away_stats, btts_odd):
+        """Analyze Both Teams To Score market."""
+        if btts_odd < 1.50 or btts_odd > 2.50:
+            return None
+            
+        try:
+            h_gf = float(home_stats["goals"]["for"]["average"]["home"])
+            a_gf = float(away_stats["goals"]["for"]["average"]["away"])
+            h_ga = float(home_stats["goals"]["against"]["average"]["home"])
+            a_ga = float(away_stats["goals"]["against"]["average"]["away"])
+            
+            if h_gf > 1.2 and a_gf > 1.2 and h_ga > 1.0 and a_ga > 1.0:
+                return f"🥅 Les deux équipes marquent et encaissent souvent (Dom: {h_gf}/{h_ga}, Ext: {a_gf}/{a_ga})"
+        except:
+            pass
+        return None
+
+    def analyze_goalscorer(self, player_name, odds, top_scorers):
+        """Analyze Goalscorer market."""
+        if odds < 2.00: # Minimum value
+            return None
+            
+        # Check if player is in top scorers
+        # top_scorers is a list of player objects from API
+        for scorer in top_scorers:
+            if scorer['player']['name'] in player_name or player_name in scorer['player']['name']:
+                goals = scorer['statistics'][0]['goals']['total']
+                return f"🎯 Top Buteur: {scorer['player']['name']} ({goals} buts)"
+                
+        return None
