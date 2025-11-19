@@ -284,6 +284,16 @@ def start_bot_polling():
                 bot.bot.answer_callback_query(call.id, "✅ Pari marqué comme GAGNÉ !")
                 bot.bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, 
                                           text=f"{call.message.text}\n\n✅ RÉSULTAT: GAGNÉ")
+                
+                # Celebration GIF
+                import random
+                gifs = [
+                    "https://media1.tenor.com/m/uy_OBkkROWIAAAAd/yummy-tongue.gif"
+                ]
+                try:
+                    bot.bot.send_animation(call.message.chat.id, random.choice(gifs), caption="🤑 BOOOOM ! ENCAISSÉ !")
+                except:
+                    pass
             elif action == "loss":
                 tracker.update_result(bet_id, "lost", 0)
                 bot.bot.answer_callback_query(call.id, "❌ Pari marqué comme PERDU")
