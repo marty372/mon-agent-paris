@@ -15,12 +15,12 @@ if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID or not API_KEY:
 
 # Leagues Configuration (Name: ID)
 LEAGUES = {
-    "Ligue 1": 61,
-    "Premier League": 39,
-    "LaLiga": 140,
-    "Serie A": 135,
-    "Bundesliga": 78,
-    "Champions League": 2
+    "🇫🇷 Ligue 1": 61,
+    "🇬🇧 Premier League": 39,
+    "🇪🇸 La Liga": 140,
+    "🇮🇹 Serie A": 135,
+    "🇩🇪 Bundesliga": 78,
+    "🇪🇺 Champions League": 2
 }
 
 # Betting Parameters
