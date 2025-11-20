@@ -131,7 +131,9 @@ def run_analysis():
                             "raison": full_reason,
                             "confiance": confidence,
                             "stake": stake_info['stake'],
-                            "recommendation": stake_info['recommendation']
+                            "recommendation": stake_info['recommendation'],
+                            "fixture_id": fixture["id"],
+                            "match_id": match_id
                         })
 
                 # Analyze Away Bet
@@ -160,7 +162,9 @@ def run_analysis():
                             "raison": full_reason,
                             "confiance": confidence,
                             "stake": stake_info['stake'],
-                            "recommendation": stake_info['recommendation']
+                            "recommendation": stake_info['recommendation'],
+                            "fixture_id": fixture["id"],
+                            "match_id": match_id
                         })
 
                 # 2. OVER/UNDER 1.5 GOALS (ID 5)
@@ -181,7 +185,9 @@ def run_analysis():
                             "raison": reason_ou,
                             "confiance": confidence,
                             "stake": stake_info['stake'],
-                            "recommendation": stake_info['recommendation']
+                            "recommendation": stake_info['recommendation'],
+                            "fixture_id": fixture["id"],
+                            "match_id": match_id
                         })
 
                 # 3. BOTH TEAMS TO SCORE (ID 8)
@@ -202,7 +208,9 @@ def run_analysis():
                             "raison": reason_btts,
                             "confiance": confidence,
                             "stake": stake_info['stake'],
-                            "recommendation": stake_info['recommendation']
+                            "recommendation": stake_info['recommendation'],
+                            "fixture_id": fixture["id"],
+                            "match_id": match_id
                         })
                 
                 # 4. GOALSCORERS (ID 4)
@@ -230,36 +238,98 @@ def run_analysis():
                                     "raison": reason_scorer,
                                     "confiance": confidence,
                                     "stake": stake_info['stake'],
-                                    "recommendation": stake_info['recommendation']
+                                    "recommendation": stake_info['recommendation'],
+                                    "fixture_id": fixture["id"],
+                                    "match_id": match_id
                                 })
                     
             except Exception as e:
                 logger.error(f"Error processing fixture: {e}")
                 continue
 
-    # Sort and Send
+    # Sort and Save to Pending
     if all_bets:
         all_bets.sort(key=lambda x: x["confiance"], reverse=True)
         top_bets = all_bets[:5]
         
-        # Send summary first
-        # bot.send_message(f"🔍 Analyse terminée : {len(top_bets)} paris trouvés.")
-        
-        # Send individual interactive messages
         for bet in top_bets:
-            # We need the ID from the database to attach to the button
-            # Since we just inserted it, we can get the last ID or query it.
-            # For simplicity, let's assume record_bet returns the ID
-            bet_id = tracker.record_bet(bet, bet['stake'])
-            bot.send_bet_with_buttons(bet, bet_id)
+            # Save to pending bets
+            tracker.add_pending_bet(bet, bet['fixture_id'], bet['match_id'])
             
-        logger.info(f"Sent {len(top_bets)} bets to Telegram")
+        logger.info(f"Saved {len(top_bets)} pending bets")
     else:
         logger.info("No value bets found this cycle.")
 
+def run_validation():
+    """Check pending bets and validate with lineups."""
+    logger.info("Starting validation cycle...")
+    
+    api = FootballAPI()
+    analyzer = BetAnalyzer()
+    bot = BettingBot()
+    tracker = BetTracker()
+    
+    pending_bets = tracker.get_pending_bets()
+    
+    for p_bet in pending_bets:
+        try:
+            bet_data = p_bet['bet_data']
+            match_date = datetime.fromisoformat(bet_data['date'] + "T" + bet_data['heure'] + ":00")
+            # Assuming date is YYYY-MM-DD and heure is HH:MM
+            # We need to be careful with timezone. Let's assume local time or handle it simpler.
+            # Actually, let's use the created_at or just check the API for time.
+            
+            # Better: Check time difference now
+            # We need a robust way to parse the date string we saved.
+            # bet_data['date'] is "2024-05-20"
+            # bet_data['heure'] is "21:00"
+            match_dt = datetime.strptime(f"{bet_data['date']} {bet_data['heure']}", "%Y-%m-%d %H:%M")
+            
+            # Add timezone info if needed, but let's assume system time matches
+            time_diff = match_dt - datetime.now()
+            minutes_diff = time_diff.total_seconds() / 60
+            
+            # If match is in 10 to 75 minutes (Lineups usually out 60 mins before)
+            if 10 <= minutes_diff <= 75:
+                logger.info(f"Validating match {bet_data['match']}...")
+                
+                lineups = api.get_fixture_lineups(p_bet['fixture_id'])
+                
+                if lineups and len(lineups) >= 2:
+                    # Extract StartXI
+                    home_xi = lineups[0]['startXI']
+                    away_xi = lineups[1]['startXI']
+                    
+                    is_valid, reason = analyzer.validate_lineup(bet_data, home_xi, away_xi)
+                    
+                    if is_valid:
+                        # Add validation reason
+                        bet_data['raison'] += f" | {reason}"
+                        
+                        # Send and Record
+                        bet_id = tracker.record_bet(bet_data, bet_data['stake'])
+                        bot.send_bet_with_buttons(bet_data, bet_id)
+                        
+                        # Remove from pending
+                        tracker.remove_pending_bet(p_bet['id'])
+                        logger.info(f"Validated and sent bet {bet_id}")
+                    else:
+                        logger.info(f"Bet invalid due to lineup: {reason}")
+                        tracker.remove_pending_bet(p_bet['id'])
+                else:
+                    logger.info("Lineups not yet available.")
+            
+            elif minutes_diff < 0:
+                # Match started, remove pending
+                tracker.remove_pending_bet(p_bet['id'])
+                
+        except Exception as e:
+            logger.error(f"Error validating bet {p_bet['id']}: {e}")
+
 def start_scheduler():
     schedule.every(2).hours.do(run_analysis)
-    logger.info("Scheduler started...")
+    schedule.every(15).minutes.do(run_validation)
+    logger.info("Scheduler started (Analysis: 2h, Validation: 15m)...")
     while True:
         schedule.run_pending()
         time.sleep(60)

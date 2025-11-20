@@ -62,6 +62,16 @@ class BetTracker:
                 last_updated TIMESTAMP DEFAULT {timestamp_default}
             )
         ''')
+
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS pending_bets (
+                id {id_type},
+                fixture_id INTEGER,
+                match_id TEXT,
+                bet_data TEXT,
+                created_at TIMESTAMP DEFAULT {timestamp_default}
+            )
+        ''')
         
         conn.commit()
         conn.close()
@@ -198,10 +208,49 @@ Win Rate: {win_rate:.1f}%
 Profit Total: {total_profit:.2f}€
         """
         
-    def export_to_csv(self):
-        """Export bets to CSV."""
-        conn = self._get_connection()
-        df = pd.read_sql_query("SELECT * FROM bets", conn)
-        conn.close()
         df.to_csv("bets_export.csv", index=False)
         self.logger.info("Exported bets to bets_export.csv")
+
+    def add_pending_bet(self, bet_data, fixture_id, match_id):
+        """Add a bet to the pending queue."""
+        import json
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        query = "INSERT INTO pending_bets (fixture_id, match_id, bet_data) VALUES (%s, %s, %s)" if self.is_postgres else "INSERT INTO pending_bets (fixture_id, match_id, bet_data) VALUES (?, ?, ?)"
+        
+        cursor.execute(query, (fixture_id, match_id, json.dumps(bet_data)))
+        conn.commit()
+        conn.close()
+        self.logger.info(f"Added pending bet for match {match_id}")
+
+    def get_pending_bets(self):
+        """Get all pending bets."""
+        import json
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id, fixture_id, match_id, bet_data, created_at FROM pending_bets")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        results = []
+        for row in rows:
+            results.append({
+                "id": row[0],
+                "fixture_id": row[1],
+                "match_id": row[2],
+                "bet_data": json.loads(row[3]),
+                "created_at": row[4]
+            })
+        return results
+
+    def remove_pending_bet(self, bet_id):
+        """Remove a pending bet."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        query = "DELETE FROM pending_bets WHERE id = %s" if self.is_postgres else "DELETE FROM pending_bets WHERE id = ?"
+        cursor.execute(query, (bet_id,))
+        conn.commit()
+        conn.close()

@@ -74,3 +74,11 @@ class FootballAPI:
         if isinstance(data, list) and len(data) > 0:
             return data[0]
         return data
+
+    def get_fixture_lineups(self, fixture_id):
+        """Get lineups for a specific fixture."""
+        params = {
+            "fixture": fixture_id
+        }
+        data = self._get("fixtures/lineups", params)
+        return data if data else []

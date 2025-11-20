@@ -244,3 +244,38 @@ class BetAnalyzer:
                 return f"🎯 Top Buteur: {scorer['player']['name']} ({goals} buts)"
                 
         return None
+
+    def validate_lineup(self, bet_data, lineup_home, lineup_away):
+        """
+        Validate a bet against confirmed lineups.
+        Returns (is_valid, reason)
+        """
+        bet_type = bet_data['pari']
+        
+        # Helper to check player presence
+        def is_in_lineup(name, lineup):
+            if not lineup: return False
+            # API-Football lineup structure: list of {player: {id, name, ...}}
+            for item in lineup:
+                p_name = item['player']['name']
+                # Simple substring match
+                if name.lower() in p_name.lower() or p_name.lower() in name.lower():
+                    return True
+            return False
+
+        # 1. Goalscorer Bet
+        if "Buteur:" in bet_type:
+            player_name = bet_type.replace("Buteur: ", "")
+            
+            # Check Home and Away lineups
+            in_home = is_in_lineup(player_name, lineup_home)
+            in_away = is_in_lineup(player_name, lineup_away)
+            
+            if in_home or in_away:
+                return True, "✅ Joueur titulaire confirmé"
+            else:
+                return False, "❌ Joueur non titulaire (Remplaçant ou Absent)"
+                
+        # 2. For other bets (Win, Over/Under), we assume valid if lineups are out
+        # We could add logic here to check if Top Scorer is missing for a Win bet
+        return True, "✅ Compo officielle disponible"
