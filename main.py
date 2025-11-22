@@ -59,7 +59,7 @@ def run_analysis():
                 
                 # Date Filter (Next 3 days)
                 match_date = datetime.fromisoformat(fixture["date"].replace("Z", "+00:00"))
-                if match_date > datetime.now(match_date.tzinfo) + time.timedelta(days=3):
+                if match_date > datetime.now(match_date.tzinfo) + datetime.timedelta(days=3):
                     continue
 
                 # Check Odds availability
