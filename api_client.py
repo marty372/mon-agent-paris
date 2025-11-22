@@ -30,7 +30,7 @@ class FootballAPI:
         params = {
             "league": league_id,
             "season": season,
-            "bookmaker": 8  # Bet365,
+            "bookmaker": 8,  # Bet365
                     "date": datetime.now().strftime("%Y-%m-%d")
         }
         
@@ -83,4 +83,5 @@ class FootballAPI:
         }
         data = self._get("fixtures/lineups", params)
         return data if data else []
+
 
