@@ -1,6 +1,5 @@
 import requests
 import logging
-from datetime import datetime, timedelta
 import config
 
 class FootballAPI:
@@ -31,12 +30,10 @@ class FootballAPI:
             "league": league_id,
             "season": season,
             "bookmaker": 8,  # Bet365
-                    "date": datetime.now().strftime("%Y-%m-%d")
         }
         
         # We might need to filter by date manually if the API doesn't support a range in this endpoint
-        return self._get("odds", params)
-
+        
     def get_top_scorers(self, league_id, season=2024):
         """Get top 20 scorers for a league."""
         params = {
@@ -83,5 +80,6 @@ class FootballAPI:
         }
         data = self._get("fixtures/lineups", params)
         return data if data else []
+
 
 
